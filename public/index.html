@@ -7,8 +7,6 @@
     <title>Location Pin App</title>
     <!-- Leaflet CSS -->
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-    <!-- Socket.IO -->
-    <script src="/socket.io/socket.io.js"></script>
     <style>
     * {
         margin: 0;
@@ -171,6 +169,42 @@
         font-size: 0.9rem;
     }
 
+    .connection-status {
+        position: absolute;
+        top: 10px;
+        left: 10px;
+        background: rgba(255, 255, 255, 0.95);
+        padding: 0.5rem 0.75rem;
+        border-radius: 6px;
+        box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+        z-index: 1000;
+        font-size: 0.8rem;
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+    }
+
+    .status-indicator {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: #28a745;
+    }
+
+    .status-indicator.loading {
+        background: #ffc107;
+        animation: pulse 1s infinite;
+    }
+
+    .status-indicator.error {
+        background: #dc3545;
+    }
+
+    @keyframes pulse {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.5; }
+    }
+
     @media (max-width: 768px) {
         .header h1 {
             font-size: 1.5rem;
@@ -197,6 +231,14 @@
             right: 0;
             margin: 1rem;
         }
+
+        .connection-status {
+            position: relative;
+            top: 0;
+            left: 0;
+            margin: 1rem;
+            margin-bottom: 0;
+        }
     }
     </style>
 </head>
@@ -213,15 +255,22 @@
         <button id="findMe" class="btn btn-primary">
             🎯 Find My Location
         </button>
+        <button id="clearPins" class="btn btn-danger">
+            🗑️ Clear All Pins
+        </button>
     </div>
     <div class="status">
         <div id="statusMessages"></div>
     </div>
     <div style="position: relative;">
         <div id="map"></div>
+        <div class="connection-status">
+            <div id="statusIndicator" class="status-indicator"></div>
+            <span id="connectionText">Connected</span>
+        </div>
         <div class="stats">
             <div><strong>Total Pins:</strong> <span id="pinCount">0</span></div>
-            <div><strong>Online Users:</strong> <span id="userCount">0</span></div>
+            <div><strong>Last Updated:</strong> <span id="lastUpdated">Never</span></div>
         </div>
     </div>
     <!-- Leaflet JS -->
@@ -236,14 +285,12 @@
         maxZoom: 19
     }).addTo(map);
 
-    // Initialize Socket.IO
-    const socket = io();
-
     // Store all pins and markers
     const pins = new Map();
     const markers = new Map();
     let userLocation = null;
     let userMarker = null;
+    let pollingInterval = null;
 
     // DOM elements
     const dropPinBtn = document.getElementById('dropPin');
@@ -251,7 +298,9 @@
     const clearPinsBtn = document.getElementById('clearPins');
     const statusMessages = document.getElementById('statusMessages');
     const pinCount = document.getElementById('pinCount');
-    const userCount = document.getElementById('userCount');
+    const lastUpdated = document.getElementById('lastUpdated');
+    const statusIndicator = document.getElementById('statusIndicator');
+    const connectionText = document.getElementById('connectionText');
 
     // Utility functions
     function showStatus(message, type = 'info') {
@@ -263,6 +312,15 @@
         setTimeout(() => {
             statusDiv.remove();
         }, 5000);
+    }
+
+    function updateConnectionStatus(status, message) {
+        statusIndicator.className = `status-indicator ${status}`;
+        connectionText.textContent = message;
+    }
+
+    function updateLastUpdated() {
+        lastUpdated.textContent = new Date().toLocaleTimeString();
     }
 
     function getAccuracyClass(accuracy) {
@@ -301,6 +359,11 @@
     }
 
     function addPinToMap(pin) {
+        // Check if pin already exists
+        if (markers.has(pin.id)) {
+            return;
+        }
+
         const marker = L.marker([pin.latitude, pin.longitude], {
             icon: L.divIcon({
                 className: 'custom-pin',
@@ -330,10 +393,6 @@
 
     function updatePinCount() {
         pinCount.textContent = pins.size;
-    }
-
-    function updateUserCount(count) {
-        userCount.textContent = count;
     }
 
     // Geolocation functions
@@ -386,6 +445,39 @@
     }
 
     // API functions
+    async function fetchPins() {
+        try {
+            updateConnectionStatus('loading', 'Updating...');
+            
+            const response = await fetch('/api/pins');
+            if (!response.ok) {
+                throw new Error('Failed to fetch pins');
+            }
+
+            const serverPins = await response.json();
+            
+            // Update map with new pins
+            serverPins.forEach(pin => {
+                addPinToMap(pin);
+            });
+
+            // Remove pins that no longer exist on server
+            const serverPinIds = new Set(serverPins.map(pin => pin.id));
+            for (const pinId of pins.keys()) {
+                if (!serverPinIds.has(pinId)) {
+                    removePinFromMap(pinId);
+                }
+            }
+
+            updateConnectionStatus('', 'Connected');
+            updateLastUpdated();
+            
+        } catch (error) {
+            console.error('Error fetching pins:', error);
+            updateConnectionStatus('error', 'Connection Error');
+        }
+    }
+
     async function dropPin(location) {
         try {
             dropPinBtn.disabled = true;
@@ -410,6 +502,7 @@
             }
 
             const pin = await response.json();
+            addPinToMap(pin);
             showStatus('Pin dropped successfully!', 'success');
 
             dropPinBtn.disabled = false;
@@ -428,15 +521,36 @@
             clearPinsBtn.disabled = true;
 
             const pinIds = Array.from(pins.keys());
-            for (const pinId of pinIds) {
-                await fetch(`/api/pins/${pinId}`, { method: 'DELETE' });
-            }
+            const deletePromises = pinIds.map(pinId => 
+                fetch(`/api/pins/${pinId}`, { method: 'DELETE' })
+            );
+            
+            await Promise.all(deletePromises);
+
+            // Clear local pins
+            pins.forEach((pin, pinId) => removePinFromMap(pinId));
 
             showStatus('All pins cleared!', 'success');
             clearPinsBtn.disabled = false;
         } catch (error) {
             showStatus('Error clearing pins: ' + error.message, 'error');
             clearPinsBtn.disabled = false;
+        }
+    }
+
+    // Polling function to update pins every 5 seconds
+    function startPolling() {
+        // Initial fetch
+        fetchPins();
+        
+        // Set up polling
+        pollingInterval = setInterval(fetchPins, 5000);
+    }
+
+    function stopPolling() {
+        if (pollingInterval) {
+            clearInterval(pollingInterval);
+            pollingInterval = null;
         }
     }
 
@@ -490,34 +604,23 @@
 
     clearPinsBtn.addEventListener('click', clearAllPins);
 
-    // Socket.IO event listeners
-    socket.on('connect', () => {
-        showStatus('Connected to server', 'success');
-    });
-
-    socket.on('disconnect', () => {
-        showStatus('Disconnected from server', 'error');
-    });
-
-    socket.on('existingPins', (existingPins) => {
-        existingPins.forEach(pin => {
-            addPinToMap(pin);
-        });
-        showStatus(`Loaded ${existingPins.length} existing pins`, 'info');
-    });
-
-    socket.on('newPin', (pin) => {
-        addPinToMap(pin);
-        showStatus('New pin added by another user!', 'info');
-    });
-
-    socket.on('pinDeleted', (data) => {
-        removePinFromMap(data.id);
-        showStatus('Pin removed', 'info');
+    // Handle page visibility changes to optimize polling
+    document.addEventListener('visibilitychange', () => {
+        if (document.hidden) {
+            stopPolling();
+        } else {
+            startPolling();
+        }
     });
 
     // Initialize the app
     showStatus('App initialized. Click "Find My Location" to get started!', 'info');
+    startPolling();
+
+    // Clean up on page unload
+    window.addEventListener('beforeunload', () => {
+        stopPolling();
+    });
     </script>
 </body>
 
