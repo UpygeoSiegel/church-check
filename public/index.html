@@ -1,0 +1,533 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Location Pin App</title>
+    
+    <!-- Leaflet CSS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    
+    <!-- Socket.IO -->
+    <script src="/socket.io/socket.io.js"></script>
+    
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #f0f2f5;
+        }
+        
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 1rem;
+            text-align: center;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        
+        .header h1 {
+            margin-bottom: 0.5rem;
+            font-size: 2rem;
+        }
+        
+        .header p {
+            opacity: 0.9;
+            font-size: 1.1rem;
+        }
+        
+        .controls {
+            padding: 1rem;
+            background: white;
+            border-bottom: 1px solid #e0e0e0;
+            display: flex;
+            justify-content: center;
+            gap: 1rem;
+            flex-wrap: wrap;
+        }
+        
+        .btn {
+            padding: 0.75rem 1.5rem;
+            border: none;
+            border-radius: 8px;
+            font-size: 1rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        
+        .btn-primary {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+        
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4);
+        }
+        
+        .btn-danger {
+            background: linear-gradient(135deg, #ff6b6b 0%, #ee5a24 100%);
+            color: white;
+        }
+        
+        .btn-danger:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 15px rgba(255, 107, 107, 0.4);
+        }
+        
+        .btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none !important;
+        }
+        
+        .status {
+            padding: 1rem;
+            background: white;
+            border-bottom: 1px solid #e0e0e0;
+            text-align: center;
+        }
+        
+        .status-message {
+            padding: 0.5rem 1rem;
+            border-radius: 6px;
+            margin: 0.25rem;
+            display: inline-block;
+            font-weight: 500;
+        }
+        
+        .status-success {
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+        
+        .status-error {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+        
+        .status-info {
+            background: #cce7ff;
+            color: #004085;
+            border: 1px solid #abd1f0;
+        }
+        
+        #map {
+            height: calc(100vh - 200px);
+            width: 100%;
+        }
+        
+        .pin-info {
+            padding: 0.5rem;
+            font-size: 0.9rem;
+        }
+        
+        .pin-info strong {
+            color: #333;
+        }
+        
+        .accuracy-indicator {
+            display: inline-block;
+            padding: 0.2rem 0.4rem;
+            border-radius: 3px;
+            font-size: 0.8rem;
+            font-weight: bold;
+            margin-left: 0.5rem;
+        }
+        
+        .accuracy-high {
+            background: #d4edda;
+            color: #155724;
+        }
+        
+        .accuracy-medium {
+            background: #fff3cd;
+            color: #856404;
+        }
+        
+        .accuracy-low {
+            background: #f8d7da;
+            color: #721c24;
+        }
+        
+        .stats {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            background: rgba(255, 255, 255, 0.95);
+            padding: 0.75rem;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            z-index: 1000;
+            font-size: 0.9rem;
+        }
+        
+        @media (max-width: 768px) {
+            .header h1 {
+                font-size: 1.5rem;
+            }
+            
+            .header p {
+                font-size: 1rem;
+            }
+            
+            .controls {
+                flex-direction: column;
+                align-items: center;
+            }
+            
+            .btn {
+                width: 100%;
+                max-width: 300px;
+                justify-content: center;
+            }
+            
+            .stats {
+                position: relative;
+                top: 0;
+                right: 0;
+                margin: 1rem;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>📍 Location Pin App</h1>
+        <p>Drop pins at your exact location and see others' pins in real-time</p>
+    </div>
+    
+    <div class="controls">
+        <button id="dropPin" class="btn btn-primary">
+            📍 Drop Pin Here
+        </button>
+        <button id="findMe" class="btn btn-primary">
+            🎯 Find My Location
+        </button>
+        <button id="clearPins" class="btn btn-danger">
+            🗑️ Clear All Pins
+        </button>
+    </div>
+    
+    <div class="status">
+        <div id="statusMessages"></div>
+    </div>
+    
+    <div style="position: relative;">
+        <div id="map"></div>
+        <div class="stats">
+            <div><strong>Total Pins:</strong> <span id="pinCount">0</span></div>
+            <div><strong>Online Users:</strong> <span id="userCount">0</span></div>
+        </div>
+    </div>
+
+    <!-- Leaflet JS -->
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    
+    <script>
+        // Initialize the map
+        const map = L.map('map').setView([40.7128, -74.0060], 13); // Default to NYC
+        
+        // Add OpenStreetMap tiles
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: '© OpenStreetMap contributors',
+            maxZoom: 19
+        }).addTo(map);
+        
+        // Initialize Socket.IO
+        const socket = io();
+        
+        // Store all pins and markers
+        const pins = new Map();
+        const markers = new Map();
+        let userLocation = null;
+        let userMarker = null;
+        
+        // DOM elements
+        const dropPinBtn = document.getElementById('dropPin');
+        const findMeBtn = document.getElementById('findMe');
+        const clearPinsBtn = document.getElementById('clearPins');
+        const statusMessages = document.getElementById('statusMessages');
+        const pinCount = document.getElementById('pinCount');
+        const userCount = document.getElementById('userCount');
+        
+        // Utility functions
+        function showStatus(message, type = 'info') {
+            const statusDiv = document.createElement('div');
+            statusDiv.className = `status-message status-${type}`;
+            statusDiv.textContent = message;
+            statusMessages.appendChild(statusDiv);
+            
+            setTimeout(() => {
+                statusDiv.remove();
+            }, 5000);
+        }
+        
+        function getAccuracyClass(accuracy) {
+            if (!accuracy) return 'accuracy-low';
+            if (accuracy <= 10) return 'accuracy-high';
+            if (accuracy <= 50) return 'accuracy-medium';
+            return 'accuracy-low';
+        }
+        
+        function getAccuracyText(accuracy) {
+            if (!accuracy) return 'Unknown';
+            if (accuracy <= 10) return 'High';
+            if (accuracy <= 50) return 'Medium';
+            return 'Low';
+        }
+        
+        function formatTimestamp(timestamp) {
+            return new Date(timestamp).toLocaleString();
+        }
+        
+        function createPinPopupContent(pin) {
+            const accuracyClass = getAccuracyClass(pin.accuracy);
+            const accuracyText = getAccuracyText(pin.accuracy);
+            
+            return `
+                <div class="pin-info">
+                    <strong>📍 Pin Location</strong><br>
+                    <strong>Lat:</strong> ${pin.latitude.toFixed(6)}<br>
+                    <strong>Lng:</strong> ${pin.longitude.toFixed(6)}<br>
+                    <strong>Accuracy:</strong> ${pin.accuracy ? pin.accuracy.toFixed(1) + 'm' : 'Unknown'}
+                    <span class="accuracy-indicator ${accuracyClass}">${accuracyText}</span><br>
+                    <strong>Time:</strong> ${formatTimestamp(pin.timestamp)}<br>
+                    <strong>Device:</strong> ${pin.userAgent}
+                </div>
+            `;
+        }
+        
+        function addPinToMap(pin) {
+            const marker = L.marker([pin.latitude, pin.longitude], {
+                icon: L.divIcon({
+                    className: 'custom-pin',
+                    html: '📍',
+                    iconSize: [25, 25],
+                    iconAnchor: [12, 25]
+                })
+            });
+            
+            marker.bindPopup(createPinPopupContent(pin));
+            marker.addTo(map);
+            
+            pins.set(pin.id, pin);
+            markers.set(pin.id, marker);
+            
+            updatePinCount();
+        }
+        
+        function removePinFromMap(pinId) {
+            if (markers.has(pinId)) {
+                map.removeLayer(markers.get(pinId));
+                markers.delete(pinId);
+                pins.delete(pinId);
+                updatePinCount();
+            }
+        }
+        
+        function updatePinCount() {
+            pinCount.textContent = pins.size;
+        }
+        
+        function updateUserCount(count) {
+            userCount.textContent = count;
+        }
+        
+        // Geolocation functions
+        function getCurrentLocation() {
+            return new Promise((resolve, reject) => {
+                if (!navigator.geolocation) {
+                    reject(new Error('Geolocation is not supported by this browser'));
+                    return;
+                }
+                
+                showStatus('Getting your location...', 'info');
+                findMeBtn.disabled = true;
+                
+                navigator.geolocation.getCurrentPosition(
+                    (position) => {
+                        const location = {
+                            latitude: position.coords.latitude,
+                            longitude: position.coords.longitude,
+                            accuracy: position.coords.accuracy,
+                            timestamp: new Date(position.timestamp).toISOString()
+                        };
+                        
+                        findMeBtn.disabled = false;
+                        resolve(location);
+                    },
+                    (error) => {
+                        findMeBtn.disabled = false;
+                        let message = 'Unable to get your location: ';
+                        switch (error.code) {
+                            case error.PERMISSION_DENIED:
+                                message += 'Permission denied';
+                                break;
+                            case error.POSITION_UNAVAILABLE:
+                                message += 'Position unavailable';
+                                break;
+                            case error.TIMEOUT:
+                                message += 'Request timeout';
+                                break;
+                            default:
+                                message += 'Unknown error';
+                        }
+                        reject(new Error(message));
+                    },
+                    {
+                        enableHighAccuracy: true,
+                        timeout: 10000,
+                        maximumAge: 0
+                    }
+                );
+            });
+        }
+        
+        // API functions
+        async function dropPin(location) {
+            try {
+                dropPinBtn.disabled = true;
+                showStatus('Dropping pin...', 'info');
+                
+                const response = await fetch('/api/pins', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        latitude: location.latitude,
+                        longitude: location.longitude,
+                        accuracy: location.accuracy,
+                        timestamp: location.timestamp,
+                        userAgent: navigator.userAgent
+                    })
+                });
+                
+                if (!response.ok) {
+                    throw new Error('Failed to drop pin');
+                }
+                
+                const pin = await response.json();
+                showStatus('Pin dropped successfully!', 'success');
+                
+                dropPinBtn.disabled = false;
+            } catch (error) {
+                showStatus('Error dropping pin: ' + error.message, 'error');
+                dropPinBtn.disabled = false;
+            }
+        }
+        
+        async function clearAllPins() {
+            if (!confirm('Are you sure you want to clear all pins? This action cannot be undone.')) {
+                return;
+            }
+            
+            try {
+                clearPinsBtn.disabled = true;
+                
+                const pinIds = Array.from(pins.keys());
+                for (const pinId of pinIds) {
+                    await fetch(`/api/pins/${pinId}`, { method: 'DELETE' });
+                }
+                
+                showStatus('All pins cleared!', 'success');
+                clearPinsBtn.disabled = false;
+            } catch (error) {
+                showStatus('Error clearing pins: ' + error.message, 'error');
+                clearPinsBtn.disabled = false;
+            }
+        }
+        
+        // Event listeners
+        findMeBtn.addEventListener('click', async () => {
+            try {
+                const location = await getCurrentLocation();
+                userLocation = location;
+                
+                // Remove previous user marker
+                if (userMarker) {
+                    map.removeLayer(userMarker);
+                }
+                
+                // Add user marker
+                userMarker = L.marker([location.latitude, location.longitude], {
+                    icon: L.divIcon({
+                        className: 'user-marker',
+                        html: '🎯',
+                        iconSize: [30, 30],
+                        iconAnchor: [15, 30]
+                    })
+                });
+                
+                userMarker.bindPopup(`
+                    <div class="pin-info">
+                        <strong>🎯 Your Location</strong><br>
+                        <strong>Lat:</strong> ${location.latitude.toFixed(6)}<br>
+                        <strong>Lng:</strong> ${location.longitude.toFixed(6)}<br>
+                        <strong>Accuracy:</strong> ${location.accuracy ? location.accuracy.toFixed(1) + 'm' : 'Unknown'}
+                    </div>
+                `);
+                
+                userMarker.addTo(map);
+                map.setView([location.latitude, location.longitude], 16);
+                
+                showStatus(`Location found! Accuracy: ${location.accuracy ? location.accuracy.toFixed(1) + 'm' : 'Unknown'}`, 'success');
+            } catch (error) {
+                showStatus(error.message, 'error');
+            }
+        });
+        
+        dropPinBtn.addEventListener('click', async () => {
+            if (!userLocation) {
+                showStatus('Please find your location first', 'error');
+                return;
+            }
+            
+            await dropPin(userLocation);
+        });
+        
+        clearPinsBtn.addEventListener('click', clearAllPins);
+        
+        // Socket.IO event listeners
+        socket.on('connect', () => {
+            showStatus('Connected to server', 'success');
+        });
+        
+        socket.on('disconnect', () => {
+            showStatus('Disconnected from server', 'error');
+        });
+        
+        socket.on('existingPins', (existingPins) => {
+            existingPins.forEach(pin => {
+                addPinToMap(pin);
+            });
+            showStatus(`Loaded ${existingPins.length} existing pins`, 'info');
+        });
+        
+        socket.on('newPin', (pin) => {
+            addPinToMap(pin);
+            showStatus('New pin added by another user!', 'info');
+        });
+        
+        socket.on('pinDeleted', (data) => {
+            removePinFromMap(data.id);
+            showStatus('Pin removed', 'info');
+        });
+        
+        // Initialize the app
+        showStatus('App initialized. Click "Find My Location" to get started!', 'info');
+    </script>
+</body>
+</html>
